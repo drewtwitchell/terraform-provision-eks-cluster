@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MPL-2.0
 
 provider "aws" {
-  region = var.region
+shared_credentials_file = ~/.aws/credentials"
+region = var.aws_region
 }
 
 # Filter out local zones, which are not currently supported 
