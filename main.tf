@@ -3,7 +3,7 @@
 
 provider "aws" {
 shared_credentials_file = "~/.aws/credentials"
-region = var.aws_region
+region = var.region
 }
 
 # Filter out local zones, which are not currently supported 
