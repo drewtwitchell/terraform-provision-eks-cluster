@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 provider "aws" {
-shared_credentials_files = "~/.aws/credentials"
+shared_credentials_files = "[~/.aws/credentials]"
 region = var.region
 }
 
