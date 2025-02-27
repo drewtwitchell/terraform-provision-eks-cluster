@@ -23,8 +23,17 @@ data "aws_subnets" "public" {
   }
 }
 
+# Lookup individual subnet details
+data "aws_subnet" "public_filtered" {
+  for_each = toset(data.aws_subnets.public.ids)
+  id       = each.value
+}
+
+# Get only ONE subnet per Availability Zone
 locals {
-  cluster_name = "pse_task-eks-${random_string.suffix.result}"
+  unique_public_subnets = distinct([
+    for s in data.aws_subnet.public_filtered : s.id if s.availability_zone != ""
+  ])
 }
 
 resource "random_string" "suffix" {
@@ -37,7 +46,7 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.8.5"
 
-  cluster_name    = local.cluster_name
+  cluster_name    = "pse_task-eks-${random_string.suffix.result}"
   cluster_version = "1.29"
 
   # Run EKS in private subnets
@@ -130,23 +139,6 @@ resource "aws_security_group" "alb_sg" {
   tags = {
     Name = "alb-security-group"
   }
-}
-
-# Get Public Subnets with Unique AZs
-data "aws_subnet" "public_filtered" {
-  for_each = toset(data.aws_subnets.public.ids)
-  id       = each.value
-}
-
-locals {
-  unique_public_subnets = [
-    for subnet in distinct([
-      for s in data.aws_subnet.public_filtered : {
-        az = s.availability_zone
-        id = s.id
-      }
-    ]) : subnet.id
-  ]
 }
 
 # Create a Public ALB in the public subnets
