@@ -32,6 +32,7 @@ resource "random_string" "suffix" {
   special = false
 }
 
+# EKS Cluster
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.8.5"
@@ -60,23 +61,19 @@ module "eks" {
 
   eks_managed_node_groups = {
     one = {
-      name = "node-group-1"
-
+      name           = "node-group-1"
       instance_types = ["t3.small"]
-
-      min_size     = 1
-      max_size     = 3
-      desired_size = 2
+      min_size       = 1
+      max_size       = 3
+      desired_size   = 2
     }
 
     two = {
-      name = "node-group-2"
-
+      name           = "node-group-2"
       instance_types = ["t3.small"]
-
-      min_size     = 1
-      max_size     = 2
-      desired_size = 1
+      min_size       = 1
+      max_size       = 2
+      desired_size   = 1
     }
   }
 }
@@ -135,6 +132,18 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
+# Get Public Subnets with Unique AZs
+data "aws_subnet" "public_filtered" {
+  for_each = toset(data.aws_subnets.public.ids)
+  id       = each.value
+}
+
+locals {
+  unique_public_subnets = [
+    for az, subnet in { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id } : subnet
+  ]
+}
+
 # Create a Public ALB in the public subnets
 resource "aws_lb" "eks_alb" {
   name               = "eks-alb"
@@ -142,8 +151,8 @@ resource "aws_lb" "eks_alb" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
 
-  # Ensure only up to three unique subnets are selected (one per AZ)
-  subnets = [for s in data.aws_subnets.public.ids : s if !contains(slice(data.aws_subnets.public.ids, 0, index(data.aws_subnets.public.ids, s)), s)]
+  # Attach ALB to only one subnet per AZ
+  subnets = local.unique_public_subnets
 
   enable_deletion_protection = false
 
@@ -208,5 +217,6 @@ resource "aws_lb_target_group_attachment" "eks_nodes" {
   target_id        = data.aws_instances.eks_node_group_one.ids[count.index]
   port             = 80
 }
+
 
 
