@@ -23,30 +23,29 @@ data "aws_subnets" "public" {
   }
 }
 
-# Lookup individual subnet details
-data "aws_subnet" "public_filtered" {
-  for_each = toset(data.aws_subnets.public.ids)
-  id       = each.value
-}
-
-# Ensure exactly ONE subnet per AZ for ALB
-locals {
-  unique_public_subnets = [for s in values({
-    for s in data.aws_subnet.public_filtered : s.availability_zone => s.id...
-  }) : tostring(s)]
-}
-
+# Generate a random suffix for the cluster name
 resource "random_string" "suffix" {
   length  = 8
   special = false
 }
 
-# EKS Cluster
+locals {
+  cluster_name = "pse_task-eks-${random_string.suffix.result}"
+
+  # Ensure only unique public subnets (one per AZ) are selected
+  unique_public_subnets = distinct([
+    for s in data.aws_subnets.public.ids : s
+  ])
+}
+
+# --------------------------
+# EKS Cluster (Private Subnets)
+# --------------------------
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.8.5"
 
-  cluster_name    = "pse_task-eks-${random_string.suffix.result}"
+  cluster_name    = local.cluster_name
   cluster_version = "1.29"
 
   # Run EKS in private subnets
@@ -103,9 +102,9 @@ module "irsa-ebs-csi" {
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
 }
 
-# ---------------------------------
+# --------------------------
 # Public AWS Application Load Balancer (ALB)
-# ---------------------------------
+# --------------------------
 
 # Security Group for ALB (Public Access)
 resource "aws_security_group" "alb_sg" {
@@ -148,7 +147,7 @@ resource "aws_lb" "eks_alb" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
 
-  # Attach ALB to only one subnet per AZ
+  # Attach ALB to only unique subnets (one per AZ)
   subnets = local.unique_public_subnets
 
   enable_deletion_protection = false
@@ -191,9 +190,9 @@ resource "aws_lb_listener" "http_listener" {
   }
 }
 
-# ---------------------------------------------------------------
+# --------------------------
 # Lookup the EC2 instances for the node group "one" using tags
-# ---------------------------------------------------------------
+# --------------------------
 data "aws_instances" "eks_node_group_one" {
   filter {
     name   = "tag:eks:nodegroup-name"
