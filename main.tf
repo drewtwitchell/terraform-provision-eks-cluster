@@ -26,14 +26,21 @@ data "aws_subnet" "public_filtered" {
 }
 
 locals {
-  az_to_subnet_map       = merge([for s in data.aws_subnet.public_filtered : { (s.availability_zone) = s.id }]...)
-  unique_public_subnets  = values(local.az_to_subnet_map)
-  cluster_name           = "pse_task-eks-${random_string.suffix.result}"
+  az_to_subnet_map      = merge([for s in data.aws_subnet.public_filtered : { (s.availability_zone) = s.id }]...)
+  unique_public_subnets = values(local.az_to_subnet_map)
+  cluster_name          = "pse_task-eks-${random_string.suffix.result}"
 }
 
 resource "random_string" "suffix" {
   length  = 8
   special = false
+}
+
+module "bastion" {
+  source   = "./bastion"
+  vpc_id   = data.aws_vpc.existing.id
+  subnets  = data.aws_subnets.public.ids
+  key_name = "PSE_TASKY"
 }
 
 module "eks" {
@@ -121,9 +128,7 @@ resource "aws_security_group" "alb_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "alb-security-group"
-  }
+  tags = { Name = "alb-security-group" }
 }
 
 resource "aws_lb" "eks_alb" {
@@ -134,9 +139,7 @@ resource "aws_lb" "eks_alb" {
   subnets            = local.unique_public_subnets
   enable_deletion_protection = false
 
-  tags = {
-    Name = "eks-alb"
-  }
+  tags = { Name = "eks-alb" }
 }
 
 resource "aws_lb_target_group" "eks_target_group" {
@@ -154,9 +157,7 @@ resource "aws_lb_target_group" "eks_target_group" {
     unhealthy_threshold = 3
   }
 
-  tags = {
-    Name = "eks-target-group"
-  }
+  tags = { Name = "eks-target-group" }
 }
 
 resource "aws_lb_listener" "http_listener" {
