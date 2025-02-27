@@ -31,9 +31,9 @@ data "aws_subnet" "public_filtered" {
 
 # Ensure exactly ONE subnet per AZ for ALB
 locals {
-  unique_public_subnets = values({
+  unique_public_subnets = [for s in values({
     for s in data.aws_subnet.public_filtered : s.availability_zone => s.id...
-  })
+  }) : tostring(s)]
 }
 
 resource "random_string" "suffix" {
