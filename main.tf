@@ -140,7 +140,12 @@ data "aws_subnet" "public_filtered" {
 
 locals {
   unique_public_subnets = [
-    for az, subnet in { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id } : subnet
+    for subnet in distinct([
+      for s in data.aws_subnet.public_filtered : {
+        az = s.availability_zone
+        id = s.id
+      }
+    ]) : subnet.id
   ]
 }
 
@@ -217,6 +222,3 @@ resource "aws_lb_target_group_attachment" "eks_nodes" {
   target_id        = data.aws_instances.eks_node_group_one.ids[count.index]
   port             = 80
 }
-
-
-
