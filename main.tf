@@ -142,8 +142,8 @@ resource "aws_lb" "eks_alb" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
 
-  # Ensure only one subnet per AZ
-  subnets = [for az, subnets in { for s in data.aws_subnets.public.ids : s => s if s != "" } : subnets[0]]
+  # Ensure only up to three unique subnets are selected (one per AZ)
+  subnets = [for idx, subnet in data.aws_subnets.public.ids : subnet if idx < 3]
 
   enable_deletion_protection = false
 
