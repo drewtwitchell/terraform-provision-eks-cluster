@@ -143,7 +143,7 @@ resource "aws_lb" "eks_alb" {
   security_groups    = [aws_security_group.alb_sg.id]
 
   # Ensure only up to three unique subnets are selected (one per AZ)
-  subnets = [for idx, subnet in data.aws_subnets.public.ids : subnet if idx < 3]
+  subnets = [for s in data.aws_subnets.public.ids : s if !contains(slice(data.aws_subnets.public.ids, 0, index(data.aws_subnets.public.ids, s)), s)]
 
   enable_deletion_protection = false
 
