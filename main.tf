@@ -29,10 +29,10 @@ data "aws_subnet" "public_filtered" {
   id       = each.value
 }
 
-# Ensure only one subnet per AZ (Fix Duplicate AZs)
+# Fix duplicate AZ keys by using a list instead of a map
 locals {
-  az_to_subnet_map      = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id... }
-  unique_public_subnets = slice(values(local.az_to_subnet_map), 0, 3) # Ensure max of 3 subnets
+  az_to_subnet_list     = distinct([for s in data.aws_subnet.public_filtered : { az = s.availability_zone, subnet = s.id }])
+  unique_public_subnets = [for s in local.az_to_subnet_list : s.subnet]
 }
 
 resource "random_string" "suffix" {
