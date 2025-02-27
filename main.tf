@@ -2,33 +2,50 @@ provider "aws" {
   region = var.region
 }
 
-data "aws_vpc" "existing" {
-  id = "vpc-0fe15104f4f4258bb"
+resource "aws_vpc" "new_vpc" {
+  cidr_block = "10.0.0.0/16"
 }
 
-data "aws_subnets" "private" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.existing.id]
-  }
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.new_vpc.id
 }
 
-data "aws_subnets" "public" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.existing.id]
-  }
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.new_vpc.id
 }
 
-data "aws_subnet" "public_filtered" {
-  for_each = toset(data.aws_subnets.public.ids)
-  id       = each.value
+resource "aws_route" "public_internet_access" {
+  route_table_id         = aws_route_table.public_rt.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.igw.id
+}
+
+resource "aws_subnet" "public_subnet" {
+  vpc_id                  = aws_vpc.new_vpc.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
+  availability_zone       = "us-east-1a"
+}
+
+resource "aws_route_table_association" "public_subnet_assoc" {
+  subnet_id      = aws_subnet.public_subnet.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+resource "aws_subnet" "private_subnet_1" {
+  vpc_id            = aws_vpc.new_vpc.id
+  cidr_block = "10.0.4.0/24"
+  availability_zone = "us-east-1a"
+}
+
+resource "aws_subnet" "private_subnet_2" {
+  vpc_id            = aws_vpc.new_vpc.id
+  cidr_block = "10.0.5.0/24"
+  availability_zone = "us-east-1b"
 }
 
 locals {
-  az_to_subnet_map      = merge([for s in data.aws_subnet.public_filtered : { (s.availability_zone) = s.id }]...)
-  unique_public_subnets = values(local.az_to_subnet_map)
-  cluster_name          = "pse_task-eks-${random_string.suffix.result}"
+  cluster_name = "pse-tasky-eks-${random_string.suffix.result}"
 }
 
 resource "random_string" "suffix" {
@@ -36,11 +53,35 @@ resource "random_string" "suffix" {
   special = false
 }
 
-module "bastion" {
-  source   = "./bastion"
-  vpc_id   = data.aws_vpc.existing.id
-  subnets  = data.aws_subnets.public.ids
-  key_name = "PSE_TASKY"
+resource "aws_eip" "nat" {
+  domain = "vpc"
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public_subnet.id
+  tags = { Name = "pse-tasky-nat-gateway" }
+}
+
+resource "aws_route_table" "private_rt" {
+  vpc_id = aws_vpc.new_vpc.id
+  tags = { Name = "pse-tasky-private-rt" }
+}
+
+resource "aws_route" "private_nat_route" {
+  route_table_id         = aws_route_table.private_rt.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.nat.id
+}
+
+resource "aws_route_table_association" "private_subnet_assoc_1" {
+  subnet_id      = aws_subnet.private_subnet_1.id
+  route_table_id = aws_route_table.private_rt.id
+}
+
+resource "aws_route_table_association" "private_subnet_assoc_2" {
+  subnet_id      = aws_subnet.private_subnet_2.id
+  route_table_id = aws_route_table.private_rt.id
 }
 
 module "eks" {
@@ -50,9 +91,7 @@ module "eks" {
   cluster_name    = local.cluster_name
   cluster_version = "1.29"
 
-  cluster_endpoint_public_access  = false
-  cluster_endpoint_private_access = true
-
+  cluster_endpoint_public_access           = true
   enable_cluster_creator_admin_permissions = true
 
   cluster_addons = {
@@ -61,8 +100,8 @@ module "eks" {
     }
   }
 
-  vpc_id     = data.aws_vpc.existing.id
-  subnet_ids = data.aws_subnets.private.ids
+  vpc_id     = aws_vpc.new_vpc.id
+  subnet_ids = [aws_subnet.private_subnet_1.id, aws_subnet.private_subnet_2.id]
 
   eks_managed_node_group_defaults = {
     ami_type = "AL2_x86_64"
@@ -70,19 +109,18 @@ module "eks" {
 
   eks_managed_node_groups = {
     one = {
-      name           = "node-group-1"
+      name = "node-group-1"
       instance_types = ["t3.small"]
-      min_size       = 1
-      max_size       = 3
-      desired_size   = 2
+      min_size     = 1
+      max_size     = 3
+      desired_size = 2
     }
-
     two = {
-      name           = "node-group-2"
+      name = "node-group-2"
       instance_types = ["t3.small"]
-      min_size       = 1
-      max_size       = 2
-      desired_size   = 1
+      min_size     = 1
+      max_size     = 2
+      desired_size = 1
     }
   }
 }
@@ -100,92 +138,4 @@ module "irsa-ebs-csi" {
   provider_url                  = module.eks.oidc_provider
   role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
-}
-
-resource "aws_security_group" "alb_sg" {
-  name        = "alb-security-group"
-  description = "Allow inbound HTTP and HTTPS traffic"
-  vpc_id      = data.aws_vpc.existing.id
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = { Name = "alb-security-group" }
-}
-
-resource "aws_lb" "eks_alb" {
-  name               = "eks-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = local.unique_public_subnets
-  enable_deletion_protection = false
-
-  tags = { Name = "eks-alb" }
-}
-
-resource "aws_lb_target_group" "eks_target_group" {
-  name        = "eks-target-group"
-  port        = 80
-  protocol    = "HTTP"
-  vpc_id      = data.aws_vpc.existing.id
-  target_type = "instance"
-
-  health_check {
-    path                = "/"
-    interval            = 30
-    timeout             = 5
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
-  }
-
-  tags = { Name = "eks-target-group" }
-}
-
-resource "aws_lb_listener" "http_listener" {
-  load_balancer_arn = aws_lb.eks_alb.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.eks_target_group.arn
-  }
-}
-
-data "aws_instances" "eks_node_group_one" {
-  filter {
-    name   = "tag:eks:nodegroup-name"
-    values = ["node-group-1"]
-  }
-
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.existing.id]
-  }
-}
-
-resource "aws_lb_target_group_attachment" "eks_nodes" {
-  count            = length(data.aws_instances.eks_node_group_one.ids)
-  target_group_arn = aws_lb_target_group.eks_target_group.arn
-  target_id        = data.aws_instances.eks_node_group_one.ids[count.index]
-  port             = 80
 }
