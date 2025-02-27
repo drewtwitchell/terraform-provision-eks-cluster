@@ -23,16 +23,16 @@ data "aws_subnets" "public" {
   }
 }
 
-# Fetch detailed info for public subnets
+# Fetch detailed info for each public subnet
 data "aws_subnet" "public_filtered" {
   for_each = toset(data.aws_subnets.public.ids)
   id       = each.value
 }
 
-# Ensure only one subnet per AZ
+# Ensure only one subnet per AZ (Fix Duplicate AZs)
 locals {
-  az_to_subnet_map = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id... }
-  unique_public_subnets = values(az_to_subnet_map) # Extract unique subnets
+  az_to_subnet_map        = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id if !contains(keys(az_to_subnet_map), s.availability_zone) }
+  unique_public_subnets   = [for subnet in values(local.az_to_subnet_map) : subnet]
 }
 
 resource "random_string" "suffix" {
@@ -44,7 +44,7 @@ locals {
   cluster_name = "pse_task-eks-${random_string.suffix.result}"
 }
 
-# EKS Cluster (Private Subnets Only)
+# EKS Cluster (Runs in Private Subnets Only)
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.8.5"
