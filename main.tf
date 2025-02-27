@@ -29,11 +29,11 @@ data "aws_subnet" "public_filtered" {
   id       = each.value
 }
 
-# Get only ONE subnet per Availability Zone
+# Ensure exactly ONE subnet per AZ for ALB
 locals {
-  unique_public_subnets = distinct([
-    for s in data.aws_subnet.public_filtered : s.id if s.availability_zone != ""
-  ])
+  unique_public_subnets = values(merge(
+    { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id }
+  ))
 }
 
 resource "random_string" "suffix" {
