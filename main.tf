@@ -7,7 +7,7 @@ data "aws_vpc" "existing" {
   id = "vpc-0fe15104f4f4258bb"
 }
 
-# Get private subnets (for EKS)
+# Get existing private subnets in the VPC (For EKS)
 data "aws_subnets" "private" {
   filter {
     name   = "vpc-id"
@@ -15,7 +15,7 @@ data "aws_subnets" "private" {
   }
 }
 
-# Get public subnets (for ALB)
+# Get existing public subnets in the VPC (For ALB)
 data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
@@ -23,7 +23,7 @@ data "aws_subnets" "public" {
   }
 }
 
-# Fetch detailed info for each public subnet
+# Fetch details of each public subnet
 data "aws_subnet" "public_filtered" {
   for_each = toset(data.aws_subnets.public.ids)
   id       = each.value
@@ -31,8 +31,8 @@ data "aws_subnet" "public_filtered" {
 
 # Ensure only one subnet per AZ (Fix Duplicate AZs)
 locals {
-  az_to_subnet_map      = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id }
-  unique_public_subnets = values(local.az_to_subnet_map) # Extract unique subnets
+  az_to_subnet_map      = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id... }
+  unique_public_subnets = slice(values(local.az_to_subnet_map), 0, 3) # Ensure max of 3 subnets
 }
 
 resource "random_string" "suffix" {
@@ -151,7 +151,7 @@ resource "aws_lb" "eks_alb" {
   security_groups    = [aws_security_group.alb_sg.id]
 
   # Attach ALB to only one subnet per AZ
-  subnets = slice(local.unique_public_subnets, 0, 3)
+  subnets = local.unique_public_subnets
 
   enable_deletion_protection = false
 
