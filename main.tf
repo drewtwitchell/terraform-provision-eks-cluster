@@ -2,12 +2,10 @@ provider "aws" {
   region = var.region
 }
 
-# Get existing VPC
 data "aws_vpc" "existing" {
   id = "vpc-0fe15104f4f4258bb"
 }
 
-# Get existing private subnets in the VPC (For EKS)
 data "aws_subnets" "private" {
   filter {
     name   = "vpc-id"
@@ -15,7 +13,6 @@ data "aws_subnets" "private" {
   }
 }
 
-# Get existing public subnets in the VPC (For ALB)
 data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
@@ -23,16 +20,15 @@ data "aws_subnets" "public" {
   }
 }
 
-# Fetch details of each public subnet
 data "aws_subnet" "public_filtered" {
   for_each = toset(data.aws_subnets.public.ids)
   id       = each.value
 }
 
-# **🔥 FIXED: Unique subnets per AZ**
 locals {
-  az_to_subnet_map = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id }
-  unique_public_subnets = values(local.az_to_subnet_map) # Extracts the unique subnets per AZ
+  az_to_subnet_map       = merge([for s in data.aws_subnet.public_filtered : { (s.availability_zone) = s.id }]...)
+  unique_public_subnets  = values(local.az_to_subnet_map)
+  cluster_name           = "pse_task-eks-${random_string.suffix.result}"
 }
 
 resource "random_string" "suffix" {
@@ -40,11 +36,6 @@ resource "random_string" "suffix" {
   special = false
 }
 
-locals {
-  cluster_name = "pse_task-eks-${random_string.suffix.result}"
-}
-
-# EKS Cluster (Runs in Private Subnets Only)
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.8.5"
@@ -52,8 +43,8 @@ module "eks" {
   cluster_name    = local.cluster_name
   cluster_version = "1.29"
 
-  cluster_endpoint_public_access  = false  # No public API access
-  cluster_endpoint_private_access = true   # Private API access only
+  cluster_endpoint_public_access  = false
+  cluster_endpoint_private_access = true
 
   enable_cluster_creator_admin_permissions = true
 
@@ -64,7 +55,7 @@ module "eks" {
   }
 
   vpc_id     = data.aws_vpc.existing.id
-  subnet_ids = data.aws_subnets.private.ids  # Use private subnets for worker nodes
+  subnet_ids = data.aws_subnets.private.ids
 
   eks_managed_node_group_defaults = {
     ami_type = "AL2_x86_64"
@@ -89,7 +80,6 @@ module "eks" {
   }
 }
 
-# Get EBS CSI IAM Policy
 data "aws_iam_policy" "ebs_csi_policy" {
   arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }
@@ -105,18 +95,12 @@ module "irsa-ebs-csi" {
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
 }
 
-# ---------------------------------
-# Public AWS Application Load Balancer (ALB)
-# ---------------------------------
-
-# Security Group for ALB (Public Access)
 resource "aws_security_group" "alb_sg" {
   name        = "alb-security-group"
   description = "Allow inbound HTTP and HTTPS traffic"
   vpc_id      = data.aws_vpc.existing.id
 
   ingress {
-    description = "Allow HTTP from the internet"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -124,7 +108,6 @@ resource "aws_security_group" "alb_sg" {
   }
 
   ingress {
-    description = "Allow HTTPS from the internet"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -143,16 +126,12 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
-# **🔥 FIXED: Create ALB in UNIQUE AZs**
 resource "aws_lb" "eks_alb" {
   name               = "eks-alb"
-  internal           = false  # Public ALB
+  internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-
-  # Attach ALB to only one subnet per AZ
-  subnets = local.unique_public_subnets
-
+  subnets            = local.unique_public_subnets
   enable_deletion_protection = false
 
   tags = {
@@ -160,7 +139,6 @@ resource "aws_lb" "eks_alb" {
   }
 }
 
-# Create a Target Group for forwarding traffic to EKS nodes
 resource "aws_lb_target_group" "eks_target_group" {
   name        = "eks-target-group"
   port        = 80
@@ -181,7 +159,6 @@ resource "aws_lb_target_group" "eks_target_group" {
   }
 }
 
-# ALB Listener for HTTP traffic
 resource "aws_lb_listener" "http_listener" {
   load_balancer_arn = aws_lb.eks_alb.arn
   port              = 80
@@ -193,23 +170,18 @@ resource "aws_lb_listener" "http_listener" {
   }
 }
 
-# ---------------------------------------------------------------
-# Lookup the EC2 instances for the node group "one" using tags
-# ---------------------------------------------------------------
 data "aws_instances" "eks_node_group_one" {
   filter {
     name   = "tag:eks:nodegroup-name"
     values = ["node-group-1"]
   }
 
-  # Ensure only instances in the desired VPC are returned
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.existing.id]
   }
 }
 
-# Register EKS nodes from node group "one" in the Target Group
 resource "aws_lb_target_group_attachment" "eks_nodes" {
   count            = length(data.aws_instances.eks_node_group_one.ids)
   target_group_arn = aws_lb_target_group.eks_target_group.arn
