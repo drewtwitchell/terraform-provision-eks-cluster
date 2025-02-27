@@ -141,7 +141,7 @@ resource "aws_lb" "eks_alb" {
   internal           = false  # Public ALB
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = data.aws_subnets.public.ids  # Use public subnets for internet access
+  subnets            = slice(data.aws_subnets.public.ids, 0, 3)  # Ensure only one subnet per AZ
 
   enable_deletion_protection = false
 
