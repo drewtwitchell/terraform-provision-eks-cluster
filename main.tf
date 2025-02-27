@@ -29,10 +29,10 @@ data "aws_subnet" "public_filtered" {
   id       = each.value
 }
 
-# Get unique subnets, ensuring only one subnet per AZ
+# **🔥 FIXED: Unique subnets per AZ**
 locals {
-  az_to_subnet_map = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id if !(s.availability_zone in keys(az_to_subnet_map)) }
-  unique_public_subnets = values(local.az_to_subnet_map)
+  az_to_subnet_map = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id }
+  unique_public_subnets = values(local.az_to_subnet_map) # Extracts the unique subnets per AZ
 }
 
 resource "random_string" "suffix" {
@@ -143,7 +143,7 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
-# Create a Public ALB in the public subnets
+# **🔥 FIXED: Create ALB in UNIQUE AZs**
 resource "aws_lb" "eks_alb" {
   name               = "eks-alb"
   internal           = false  # Public ALB
