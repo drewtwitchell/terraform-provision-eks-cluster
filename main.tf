@@ -7,7 +7,7 @@ data "aws_vpc" "existing" {
   id = "vpc-0fe15104f4f4258bb"
 }
 
-# Get existing private subnets in the VPC (For EKS)
+# Get private subnets (for EKS)
 data "aws_subnets" "private" {
   filter {
     name   = "vpc-id"
@@ -15,7 +15,7 @@ data "aws_subnets" "private" {
   }
 }
 
-# Get existing public subnets in the VPC (For ALB)
+# Get public subnets (for ALB)
 data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
@@ -23,36 +23,35 @@ data "aws_subnets" "public" {
   }
 }
 
-# Get Public Subnet Details
+# Fetch detailed info for public subnets
 data "aws_subnet" "public_filtered" {
   for_each = toset(data.aws_subnets.public.ids)
   id       = each.value
 }
 
-# Ensure ALB is attached to only one unique subnet per AZ
+# Ensure only one subnet per AZ
 locals {
-  unique_public_subnets = distinct([
-    for s in data.aws_subnet.public_filtered : s.id
-  ])
+  az_to_subnet_map = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id... }
+  unique_public_subnets = values(az_to_subnet_map) # Extract unique subnets
 }
 
-# Generate a random suffix for the cluster name
 resource "random_string" "suffix" {
   length  = 8
   special = false
 }
 
-# --------------------------
-# EKS Cluster (Private Subnets)
-# --------------------------
+locals {
+  cluster_name = "pse_task-eks-${random_string.suffix.result}"
+}
+
+# EKS Cluster (Private Subnets Only)
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.8.5"
 
-  cluster_name    = "pse_task-eks-${random_string.suffix.result}"
+  cluster_name    = local.cluster_name
   cluster_version = "1.29"
 
-  # Run EKS in private subnets
   cluster_endpoint_public_access  = false  # No public API access
   cluster_endpoint_private_access = true   # Private API access only
 
@@ -106,9 +105,9 @@ module "irsa-ebs-csi" {
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
 }
 
-# --------------------------
+# ---------------------------------
 # Public AWS Application Load Balancer (ALB)
-# --------------------------
+# ---------------------------------
 
 # Security Group for ALB (Public Access)
 resource "aws_security_group" "alb_sg" {
@@ -151,7 +150,7 @@ resource "aws_lb" "eks_alb" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
 
-  # Attach ALB to only unique subnets (one per AZ)
+  # Attach ALB to only one subnet per AZ
   subnets = slice(local.unique_public_subnets, 0, 3)
 
   enable_deletion_protection = false
@@ -194,9 +193,9 @@ resource "aws_lb_listener" "http_listener" {
   }
 }
 
-# --------------------------
+# ---------------------------------------------------------------
 # Lookup the EC2 instances for the node group "one" using tags
-# --------------------------
+# ---------------------------------------------------------------
 data "aws_instances" "eks_node_group_one" {
   filter {
     name   = "tag:eks:nodegroup-name"
