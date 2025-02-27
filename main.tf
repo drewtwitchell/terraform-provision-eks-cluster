@@ -7,8 +7,16 @@ data "aws_vpc" "existing" {
   id = "vpc-0fe15104f4f4258bb"
 }
 
-# Get existing private subnets in the VPC
+# Get existing private subnets in the VPC (For EKS)
 data "aws_subnets" "private" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.existing.id]
+  }
+}
+
+# Get existing public subnets in the VPC (For ALB)
+data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.existing.id]
@@ -31,7 +39,10 @@ module "eks" {
   cluster_name    = local.cluster_name
   cluster_version = "1.29"
 
-  cluster_endpoint_public_access           = true
+  # Run EKS in private subnets
+  cluster_endpoint_public_access  = false  # No public API access
+  cluster_endpoint_private_access = true   # Private API access only
+
   enable_cluster_creator_admin_permissions = true
 
   cluster_addons = {
@@ -41,7 +52,7 @@ module "eks" {
   }
 
   vpc_id     = data.aws_vpc.existing.id
-  subnet_ids = data.aws_subnets.private.ids # Use existing private subnets
+  subnet_ids = data.aws_subnets.private.ids # Use private subnets for worker nodes
 
   eks_managed_node_group_defaults = {
     ami_type = "AL2_x86_64"
@@ -84,4 +95,98 @@ module "irsa-ebs-csi" {
   provider_url                  = module.eks.oidc_provider
   role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
+}
+
+# ---------------------------------
+# Public AWS Application Load Balancer (ALB)
+# ---------------------------------
+
+# Security Group for ALB (Public Access)
+resource "aws_security_group" "alb_sg" {
+  name        = "alb-security-group"
+  description = "Allow inbound HTTP and HTTPS traffic"
+  vpc_id      = data.aws_vpc.existing.id
+
+  ingress {
+    description = "Allow HTTP from the internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]  # Public access
+  }
+
+  ingress {
+    description = "Allow HTTPS from the internet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]  # Public access
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "alb-security-group"
+  }
+}
+
+# Create a Public ALB in the public subnets
+resource "aws_lb" "eks_alb" {
+  name               = "eks-alb"
+  internal           = false  # Public ALB
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = data.aws_subnets.public.ids  # Use public subnets for internet access
+
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "eks-alb"
+  }
+}
+
+# Create a Target Group for forwarding traffic to EKS nodes
+resource "aws_lb_target_group" "eks_target_group" {
+  name        = "eks-target-group"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = data.aws_vpc.existing.id
+  target_type = "instance"
+
+  health_check {
+    path                = "/"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 3
+    unhealthy_threshold = 3
+  }
+
+  tags = {
+    Name = "eks-target-group"
+  }
+}
+
+# ALB Listener for HTTP traffic
+resource "aws_lb_listener" "http_listener" {
+  load_balancer_arn = aws_lb.eks_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.eks_target_group.arn
+  }
+}
+
+# Register EKS nodes in the Target Group
+resource "aws_lb_target_group_attachment" "eks_nodes" {
+  count            = length(module.eks.eks_managed_node_groups["one"].instances)
+  target_group_arn = aws_lb_target_group.eks_target_group.arn
+  target_id        = module.eks.eks_managed_node_groups["one"].instances[count.index].id
+  port             = 80
 }
