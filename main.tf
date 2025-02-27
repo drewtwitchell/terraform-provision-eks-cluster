@@ -23,19 +23,24 @@ data "aws_subnets" "public" {
   }
 }
 
+# Extract subnet details to filter unique ones per AZ
+data "aws_subnet" "public_filtered" {
+  for_each = toset(data.aws_subnets.public.ids)
+  id       = each.value
+}
+
+# Select unique public subnets (one per AZ)
+locals {
+  unique_public_subnets = values({
+    for s in data.aws_subnet.public_filtered :
+    s.availability_zone => s.id
+  })
+}
+
 # Generate a random suffix for the cluster name
 resource "random_string" "suffix" {
   length  = 8
   special = false
-}
-
-locals {
-  cluster_name = "pse_task-eks-${random_string.suffix.result}"
-
-  # Ensure only unique public subnets (one per AZ) are selected
-  unique_public_subnets = distinct([
-    for s in data.aws_subnets.public.ids : s
-  ])
 }
 
 # --------------------------
@@ -45,7 +50,7 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.8.5"
 
-  cluster_name    = local.cluster_name
+  cluster_name    = "pse_task-eks-${random_string.suffix.result}"
   cluster_version = "1.29"
 
   # Run EKS in private subnets
