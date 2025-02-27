@@ -31,8 +31,8 @@ data "aws_subnet" "public_filtered" {
 
 # Ensure only one subnet per AZ (Fix Duplicate AZs)
 locals {
-  az_to_subnet_map        = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id if !contains(keys(az_to_subnet_map), s.availability_zone) }
-  unique_public_subnets   = [for subnet in values(local.az_to_subnet_map) : subnet]
+  az_to_subnet_map      = { for s in data.aws_subnet.public_filtered : s.availability_zone => s.id }
+  unique_public_subnets = values(local.az_to_subnet_map) # Extract unique subnets
 }
 
 resource "random_string" "suffix" {
