@@ -23,18 +23,17 @@ data "aws_subnets" "public" {
   }
 }
 
-# Extract subnet details to filter unique ones per AZ
+# Get Public Subnet Details
 data "aws_subnet" "public_filtered" {
   for_each = toset(data.aws_subnets.public.ids)
   id       = each.value
 }
 
-# Select unique public subnets (one per AZ)
+# Ensure ALB is attached to only one unique subnet per AZ
 locals {
-  unique_public_subnets = values({
-    for s in data.aws_subnet.public_filtered :
-    s.availability_zone => s.id
-  })
+  unique_public_subnets = distinct([
+    for s in data.aws_subnet.public_filtered : s.id
+  ])
 }
 
 # Generate a random suffix for the cluster name
@@ -153,7 +152,7 @@ resource "aws_lb" "eks_alb" {
   security_groups    = [aws_security_group.alb_sg.id]
 
   # Attach ALB to only unique subnets (one per AZ)
-  subnets = local.unique_public_subnets
+  subnets = slice(local.unique_public_subnets, 0, 3)
 
   enable_deletion_protection = false
 
