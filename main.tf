@@ -141,7 +141,9 @@ resource "aws_lb" "eks_alb" {
   internal           = false  # Public ALB
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = slice(data.aws_subnets.public.ids, 0, 3)  # Ensure only one subnet per AZ
+
+  # Ensure only one subnet per AZ
+  subnets = [for az, subnets in { for s in data.aws_subnets.public.ids : s => s if s != "" } : subnets[0]]
 
   enable_deletion_protection = false
 
@@ -206,4 +208,5 @@ resource "aws_lb_target_group_attachment" "eks_nodes" {
   target_id        = data.aws_instances.eks_node_group_one.ids[count.index]
   port             = 80
 }
+
 
